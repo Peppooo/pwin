@@ -6,6 +6,7 @@
 #include <SDL2/SDL_ttf.h>
 #include <vector>
 #include <iostream>
+#include <algorithm>
 #include <string>
 
 #define CENTER_POSITION 0x99fbu81
@@ -32,6 +33,9 @@ namespace pwin {
 			rgba(int red,int green,int blue,int alpha) {
 				r = red; g = green; b = blue; a = alpha;
 			}
+			SDL_Color sdl_type() {
+				return SDL_Color{(Uint8)r,(Uint8)g,(Uint8)b,(Uint8)a};
+			}
 		};
 		rgba white(255,255,255,SDL_ALPHA_OPAQUE);
 		rgba black(0,0,0,SDL_ALPHA_OPAQUE);
@@ -45,7 +49,79 @@ namespace pwin {
 		}
 	};
 	namespace utils {
-		SDL_Texture* textTexture(string message,string fontFile,SDL_Color color,int fontSize,SDL_Renderer* renderer,SDL_Rect* dstRect)
+		vector<string> split(const string& str,const string& delimiter) {
+			vector<string> parts;
+			size_t start = 0,end = 0;
+			while(end != string::npos) {
+				end = str.find(delimiter,start);
+				parts.push_back(str.substr(start,end - start));
+				start = end + delimiter.size();
+			}
+			return parts;
+		}
+		int fitFont(string text,string font,int w,int h,int borderSize) {
+			int nFont,lFont; nFont = lFont = 0;
+			int cW,cH;
+			while(true) {
+				TTF_SizeText(TTF_OpenFont(font.c_str(),nFont),text.c_str(),&cW,&cH);
+				if(cW > w && cH > h) {
+					return lFont;
+				}
+				else if(cW <= w && cH <= h) {
+					lFont = nFont + 1;
+				}
+				nFont++;
+			}
+		}
+		string fitReturns(string text,string font,int fontSize,int w,int h) {
+			int sW,sH;
+			vector<string> words = split(text," ");
+			string ret = "";
+			string line;
+			TTF_Font* fontObject = TTF_OpenFont(font.c_str(),fontSize);
+			if(fontObject == NULL) {
+				cerr << "Error: Failed to open font " << font << endl;
+				return "";
+			}
+			for(int i = 0; i < words.size(); i++) {
+				TTF_SizeText(fontObject,words[i].c_str(),&sW,&sH);
+				if(sW > w) {
+					size_t pos = 0;
+					while(pos < words[i].size()) {
+						string chunk = words[i].substr(pos,w);
+						TTF_SizeText(fontObject,chunk.c_str(),&sW,&sH);
+						while(sW > w) {
+							cout << "removed last char " << endl;
+							chunk.erase(chunk.size() - 1);
+							TTF_SizeText(fontObject,chunk.c_str(),&sW,&sH);
+						}
+						if(line.size() + chunk.size() > w) {
+							cout << "new line" << endl;
+							ret.append(line);
+							ret.append("\n");
+							line = "";
+						}
+						line.append(chunk);
+						line.append("\n");
+						pos += chunk.size();
+					}
+				}
+				else {
+					if(sW + line.size() > w) {
+						cout << "new line" << endl;
+						ret.append(line);
+						ret.append("\n");
+						line = "";
+					}
+					line.append(words[i]);
+					line.append(" ");
+				}
+			}
+			ret.append(line);
+			TTF_CloseFont(fontObject);
+			return ret;
+		}
+		SDL_Texture* textTexture(string message,string fontFile,SDL_Color fg,int fontSize,SDL_Renderer* renderer)
 		{
 			// Open the font
 			TTF_Font* font = TTF_OpenFont(fontFile.c_str(),fontSize);
@@ -55,7 +131,7 @@ namespace pwin {
 			}
 
 			// Render the message to an SDL_Surface
-			SDL_Surface* surface = TTF_RenderText_Solid(font,message.c_str(),color);
+			SDL_Surface* surface = TTF_RenderText_Solid(font,message.c_str(),fg);
 			if(surface == nullptr) {
 				TTF_CloseFont(font);
 				std::cout << "Failed to render text: " << TTF_GetError() << std::endl;
@@ -72,18 +148,31 @@ namespace pwin {
 			SDL_FreeSurface(surface);
 			TTF_CloseFont(font);
 
-			// Render the texture
-			SDL_RenderCopy(renderer,texture,nullptr,dstRect);
-
 			return texture;
 		}
-		void renderText(SDL_Renderer* renderer,string text,string font,int x,int y,SDL_Color _color,int fontSize) {
-			SDL_Texture* texture = textTexture(text,font,_color,fontSize,renderer,new SDL_Rect{0,1,2,3});
+		void renderText(SDL_Renderer* renderer,string text,string font,int x,int y,SDL_Color fg,int fontSize) {
+			SDL_Texture* texture = textTexture(text,font,fg,fontSize,renderer);
 			int textureWidth,textureHeight;
 			SDL_QueryTexture(texture,nullptr,nullptr,&textureWidth,&textureHeight);
 			SDL_Rect renderQuad = {x, y, textureWidth, textureHeight};
 			SDL_RenderCopy(renderer,texture,nullptr,&renderQuad);
 			SDL_DestroyTexture(texture);
+		}
+		void renderBoxText(SDL_Renderer* renderer,string text,string font,int x,int y,int w,int h,SDL_Color fg)
+		{
+			renderText(renderer,text,font,x,y,fg,fitFont(text,font,w,h,1));
+		}
+		void renderTextWNewline(SDL_Renderer* renderer,string text,string font,int fontSize,int x,int y,SDL_Color fg) {
+			vector<string> lines = split(text,"\n");
+			TTF_Font* tfont = TTF_OpenFont(font.c_str(),fontSize);
+			int d; TTF_SizeText(tfont,"A",nullptr,&d);
+			for(int i = 0; i < lines.size(); i++) {
+				//lines[i].erase(std::remove(lines[i].begin(),lines[i].end(),'a'),lines[i].end());
+				renderText(renderer,lines[i],font,x,(y + d * i),fg,fontSize);
+			}
+		}
+		void renderTextWReturns(SDL_Renderer* renderer,string text,string font,int fontSize,int x,int y,int w,int h,SDL_Color fg) {
+			renderTextWNewline(renderer,fitReturns(text,font,fontSize,w,h),font,fontSize,x,y,fg);
 		}
 		point2D center(point2D host,point2D obj) {
 			return point2D((host.x / 2) - (obj.x / 2),(host.y / 2) - (obj.y / 2));
@@ -141,6 +230,7 @@ namespace pwin {
 	class Button {
 	private:
 		char* _text;
+		int _fontSize;
 		bool addedText = false;
 		colors::rgba bgColor = colors::rgba(0,0,0,0);
 		colors::rgba foreColor = colors::rgba(0,0,0,0);
@@ -163,7 +253,7 @@ namespace pwin {
 		void update() {
 			_2d_shapes::quadrilateral_shape(_window->raw_rend(),_x,_y,_w,_h,bgColor);
 			if(addedText) {
-				utils::renderText(_window->raw_rend(),string(_text),"C:\\Windows\\Fonts\\arial.ttf",_x,_y,{0,0,0,255},36);
+				utils::renderText(_window->raw_rend(),string(_text),"C:\\Windows\\Fonts\\arial.ttf",_x,_y,{0,0,0,255},_fontSize);
 			}
 			int xm,ym; Uint32 buttons;
 			SDL_PumpEvents();
@@ -178,9 +268,10 @@ namespace pwin {
 			}
 			triggered = false;
 		}
-		void addText(const char* text) {
+		void addText(const char* text, int fontSize) {
 			_text = (char*)text;
 			addedText = true;
+			_fontSize = fontSize;
 		}
 		void removeText() {
 			addedText = false;
@@ -190,24 +281,28 @@ namespace pwin {
 	private:
 		Window* _window;
 		int _x,_y,_h,_w;
-		colors::rgba _bg;
+		colors::rgba _bg,_fg;
+		int _fontsize;
 		static int count;
-		bool inT;
+		bool inT = false;
 	public:
 		string name = string("textbox").append(to_string(count));
 		string value = "";
 		bool enabled = true;
-		TextBox(Window* window,int x,int y,int w,int h,colors::rgba bg) {
+		bool autoReturn = true;
+		TextBox(Window* window,int x,int y,int w,int h,colors::rgba bg, colors::rgba fg,int fontsize) {
 			_window = window;
 			_x = x; _y = y;
 			_h = h; _w = w;
 			_bg = bg;
-			count+=1;
+			count += 1;
 			window->linkedTextBoxes.push_back(this);
 		}
 		void update() {
 			_2d_shapes::quadrilateral_shape(_window->raw_rend(),_x,_y,_w,_h,_bg);
-			utils::renderText(_window->raw_rend(),value,"C:\\Windows\\Fonts\\arial.ttf",_x,_y,{0,0,0,255},36);
+			//utils::renderBoxText(_window->raw_rend(),value,"C:\\Windows\\Fonts\\arial.ttf",_x,_y,_w,_h,_bg.sdl_type());
+			//utils::renderText(_window->raw_rend(),value,"C:\\Windows\\Fonts\\arial.ttf",_x,_y,{255,255,255,1},9);
+			utils::renderTextWReturns(_window->raw_rend(),value,"C:\\Windows\\Fonts\\arial.ttf",_fontsize,_x,_y,_w,_h,_fg.sdl_type());
 			int xm,ym; Uint32 buttons; SDL_Event e;
 			SDL_PumpEvents(); 
 			SDL_PollEvent(&e);
@@ -234,11 +329,11 @@ namespace pwin {
 						try {
 							if((value.size() - 1) > 0) {
 								value.resize(value.size() - 1);
-								cout << "resizing " << value.size() << endl;
+								//cout << "resizing " << value.size() << endl;
 							}
 							else if((value.size()) == 1) {
 								value = "";
-								cout << "setting " << value.size() << endl;
+								//cout << "setting " << value.size() << endl;
 							}
 						} catch(exception ex) {}
 					}
@@ -248,7 +343,7 @@ namespace pwin {
 					else {
 						value.push_back((char)SDL_GetKeyFromScancode(e.key.keysym.scancode));
 					}
-					cout << value << endl;
+					cout << "textbox value: " << value << endl;
 				}
 			}
 			//cout << inT << endl;
