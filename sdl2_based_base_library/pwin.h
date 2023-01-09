@@ -8,8 +8,7 @@
 #include <iostream>
 #include <algorithm>
 #include <string>
-
-#define CENTER_POSITION 0x99fbu81
+#include <sstream>
 
 using namespace std;
 
@@ -58,21 +57,7 @@ namespace pwin {
 				start = end + delimiter.size();
 			}
 			return parts;
-		}
-		int fitFont(string text,string font,int w,int h,int borderSize) {
-			int nFont,lFont; nFont = lFont = 0;
-			int cW,cH;
-			while(true) {
-				TTF_SizeText(TTF_OpenFont(font.c_str(),nFont),text.c_str(),&cW,&cH);
-				if(cW > w && cH > h) {
-					return lFont;
-				}
-				else if(cW <= w && cH <= h) {
-					lFont = nFont + 1;
-				}
-				nFont++;
-			}
-		}
+		} 
 		string fitReturns(string text,string font,int fontSize,int w,int h) {
 			int sW,sH;
 			vector<string> words = split(text," ");
@@ -121,6 +106,27 @@ namespace pwin {
 			TTF_CloseFont(fontObject);
 			return ret;
 		}
+		int fitFont(string text,string font,int width,int height) {
+			int fontSize = 1;
+			int prevFontSize;
+			TTF_Font* fontObject = TTF_OpenFont(font.c_str(),fontSize);
+			if(fontObject == NULL) {
+				cerr << "Error: Failed to open font " << font << endl;
+				return -1;
+			}
+			int sW,sH;
+			TTF_SizeText(fontObject,text.c_str(),&sW,&sH);
+			while(sW <= width && sH <= height) {
+				prevFontSize = fontSize;
+				fontSize++;
+				TTF_SetFontSize(fontObject,fontSize);
+				text = fitReturns(text,font,fontSize,width,height);
+				TTF_SizeText(fontObject,text.c_str(),&sW,&sH);
+			}
+			TTF_CloseFont(fontObject);
+			return fontSize;
+		}
+
 		SDL_Texture* textTexture(string message,string fontFile,SDL_Color fg,int fontSize,SDL_Renderer* renderer)
 		{
 			// Open the font
@@ -160,7 +166,7 @@ namespace pwin {
 		}
 		void renderBoxText(SDL_Renderer* renderer,string text,string font,int x,int y,int w,int h,SDL_Color fg)
 		{
-			renderText(renderer,text,font,x,y,fg,fitFont(text,font,w,h,1));
+			renderText(renderer,text,font,x,y,fg,fitFont(text,font,w,h));
 		}
 		void renderTextWNewline(SDL_Renderer* renderer,string text,string font,int fontSize,int x,int y,SDL_Color fg) {
 			vector<string> lines = split(text,"\n");
@@ -174,6 +180,10 @@ namespace pwin {
 		void renderTextWReturns(SDL_Renderer* renderer,string text,string font,int fontSize,int x,int y,int w,int h,SDL_Color fg) {
 			renderTextWNewline(renderer,fitReturns(text,font,fontSize,w,h),font,fontSize,x,y,fg);
 		}
+		void fixedTextRenderer(SDL_Renderer* renderer,string text,string font,int baseFontSize,int x,int y,int w,int h,SDL_Color fg) {
+			string fixedText = fitReturns(text,font,baseFontSize,w,h);
+			renderTextWNewline(renderer,fixedText,font,fitFont(fixedText,font,w,h),x,y,fg);
+		}
 		point2D center(point2D host,point2D obj) {
 			return point2D((host.x / 2) - (obj.x / 2),(host.y / 2) - (obj.y / 2));
 		}
@@ -183,6 +193,16 @@ namespace pwin {
 		TTF_Init();
 		return 0;
 	}
+	class keystreak {
+	public:
+		SDL_Scancode first;
+		SDL_Scancode second;
+		keystreak() = default;
+		keystreak(SDL_Scancode _first,SDL_Scancode _second) {
+			first = _first;
+			second = _second;
+		}
+	};
 	class Button;
 	class TextBox;
 	class Window {
@@ -277,7 +297,9 @@ namespace pwin {
 			addedText = false;
 		}
 	};
-	class TextBox {
+	class TextBox { // --- Text Boxes ---
+	public:
+		string value = "";
 	private:
 		Window* _window;
 		int _x,_y,_h,_w;
@@ -285,24 +307,38 @@ namespace pwin {
 		int _fontsize;
 		static int count;
 		bool inT = false;
+		bool scrollbarU=false;
+		int charW,charH;
+		string renderedText;
+		bool autoReturn = true;
+		bool caps = false;
+		int cursorIndex = 0;
+		keystreak removeWord;
+		void renderCursor() {
+			TTF_SizeText(TTF_OpenFont("C:\\Windows\\Fonts\\arial.ttf",_fontsize),value.c_str(),&charW,&charH);
+			_window->setColor(colors::black);
+			SDL_RenderDrawLine(_window->raw_rend(),_x + charW,_y,_x + charW,_y+charH);
+			//cout << "printing cursor at with x: " << _x << " char x size: " << charW << " cursor index: " << cursorIndex << endl;
+		}
 	public:
 		string name = string("textbox").append(to_string(count));
-		string value = "";
 		bool enabled = true;
-		bool autoReturn = true;
 		TextBox(Window* window,int x,int y,int w,int h,colors::rgba bg, colors::rgba fg,int fontsize) {
 			_window = window;
 			_x = x; _y = y;
 			_h = h; _w = w;
 			_bg = bg;
 			count += 1;
+			_fontsize = fontsize;
+				
 			window->linkedTextBoxes.push_back(this);
 		}
 		void update() {
 			_2d_shapes::quadrilateral_shape(_window->raw_rend(),_x,_y,_w,_h,_bg);
-			//utils::renderBoxText(_window->raw_rend(),value,"C:\\Windows\\Fonts\\arial.ttf",_x,_y,_w,_h,_bg.sdl_type());
-			//utils::renderText(_window->raw_rend(),value,"C:\\Windows\\Fonts\\arial.ttf",_x,_y,{255,255,255,1},9);
-			utils::renderTextWReturns(_window->raw_rend(),value,"C:\\Windows\\Fonts\\arial.ttf",_fontsize,_x,_y,_w,_h,_fg.sdl_type());
+			utils::renderText(_window->raw_rend(),value,"C:\\Windows\\Fonts\\arial.ttf",_x,_y,_fg.sdl_type(),_fontsize);
+			if(inT) {
+				renderCursor();
+			}
 			int xm,ym; Uint32 buttons; SDL_Event e;
 			SDL_PumpEvents(); 
 			SDL_PollEvent(&e);
@@ -321,11 +357,18 @@ namespace pwin {
 				}
 			}
 			if(inT) {
+				// draw cursor
+				_window->setColor(colors::black);
+
+				//SDL_RenderDrawLine(_window->raw_rend(),1,1,2,2);
 				if(e.type == SDL_KEYDOWN) {
 					if(e.key.keysym.scancode == SDL_SCANCODE_RETURN) {
-						value.append("\n");
+						value.at(cursorIndex) = (char)'\n';
 					}
 					else if(e.key.keysym.scancode == SDL_SCANCODE_BACKSPACE) {
+						if(!(cursorIndex <= 0)) {
+							cursorIndex--;
+						}
 						try {
 							if((value.size() - 1) > 0) {
 								value.resize(value.size() - 1);
@@ -335,15 +378,48 @@ namespace pwin {
 								value = "";
 								//cout << "setting " << value.size() << endl;
 							}
-						} catch(exception ex) {}
+						} catch(exception ex) {} 
+						
 					}
 					else if(e.key.keysym.scancode == SDL_SCANCODE_SPACE) {
 						value.append(" ");
+						cursorIndex++;
+					}
+					else if(e.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+						inT = false;
+					}
+					else if(e.key.keysym.scancode == SDL_SCANCODE_CAPSLOCK) {
+						caps = !caps;
+					}
+					else if(e.key.keysym.scancode == SDL_SCANCODE_LSHIFT || e.key.keysym.scancode == SDL_SCANCODE_RSHIFT) {
+						caps = !caps;
+					}
+					else if(e.key.keysym.scancode == SDL_SCANCODE_LEFT) {
+						if(!(cursorIndex<=0)) {
+							cursorIndex--;
+						}
+					}
+					else if(e.key.keysym.scancode == SDL_SCANCODE_RIGHT) {
+						if(!(cursorIndex <= value.size())) {
+							cursorIndex++;
+						}
 					}
 					else {
-						value.push_back((char)SDL_GetKeyFromScancode(e.key.keysym.scancode));
+						value.resize(cursorIndex+1);
+						if(caps) {
+							cout << "cursor index: " << cursorIndex << endl;
+							value.at(cursorIndex) = ((char)(SDL_GetKeyFromScancode(e.key.keysym.scancode)-32));
+						} else {
+							value.at(cursorIndex) = ((char)SDL_GetKeyFromScancode(e.key.keysym.scancode));
+						}
+						cursorIndex++;
 					}
 					cout << "textbox value: " << value << endl;
+				}
+				else if(e.type == SDL_KEYUP) {
+					if(e.key.keysym.scancode == SDL_SCANCODE_LSHIFT || e.key.keysym.scancode == SDL_SCANCODE_RSHIFT) {
+						caps = !caps;
+					}
 				}
 			}
 			//cout << inT << endl;
